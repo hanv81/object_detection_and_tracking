@@ -1,5 +1,7 @@
 import cv2
 import time
+import queue
+import threading
 import numpy as np
 from helper import DamageHelper
 from collections import deque
@@ -21,18 +23,55 @@ def read_config():
 
     roi = list(map(int, configs.get('roi').data.split()))
     model = configs.get('model').data
-    return roi, model
+    video_src = configs.get('video_src').data
+    calibration_path = configs.get('calibration').data
+    return roi, model, video_src, calibration_path
 
 def tracking():
-    roi, model_path = read_config()
+    roi, model_path, video_src, calibration_path = read_config()
     roi_center = np.array([(roi[2]-roi[0])//2, (roi[3]-roi[1])//2])
-    model = DamageHelper(model_path)
-    vid = cv2.VideoCapture(0)
+    
+    window_name= "display"
+    print('video src:', video_src)
+    if video_src.isdigit():
+        vid = cv2.VideoCapture(int(video_src))
+    else:
+        vid = cv2.VideoCapture(video_src)
+        calibration = np.load(calibration_path)
+        mtx = calibration["mtx"]
+        dist = calibration["dist"]
+        vid.set(cv2.CAP_PROP_BUFFERSIZE, 4)
+        vid.set(cv2.CAP_PROP_FPS, 10)
+        cv2.namedWindow(window_name, cv2.WINDOW_FREERATIO)
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    q=queue.Queue()
+    stop = False
+    def capture():
+        while not stop:
+            if q.qsize() > 10:
+                q.get()
+            ret, frame = vid.read()
+            if not ret:
+                break
+            else:
+                q.put(frame)
+
+    thread = threading.Thread(target=capture)
+    thread.start()
+    time.sleep(5)
+
     show_fps = True
+    model = DamageHelper(model_path)
     bbox_centers = deque(maxlen=15)
-    while True:
-        _, frame = vid.read()
+    
+    while not q.empty():
         t = time.time()
+        frame = q.get()
+        if not video_src.isdigit():
+            frame = cv2.resize(frame, (1920, 1080))
+            frame = cv2.undistort(frame, mtx, dist, None, mtx)
+
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cv2.rectangle(frame, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 3)
         results = model.process(frame, 416)
@@ -76,11 +115,15 @@ def tracking():
                         fontScale=.5, color=(0, 0, 255), thickness=2)
         key = cv2.waitKey(1)
         if key == ord("q"):
-            break
+            stop = True
         elif key == ord('f'):
             show_fps = not show_fps
 
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        cv2.imshow("Camera", frame)
+        cv2.imshow(window_name, frame)
+    
+    thread.join()
+    vid.release()
+    cv2.destroyAllWindows()
 
 tracking()
