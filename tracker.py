@@ -139,5 +139,6 @@ def match_detections_with_tracks(results: List, tracks: List[STrack]) -> List[De
 
 def track(frame, results):
     tracks = byte_tracker.update(output_results=results[:,:5], img_info=frame.shape, img_size=frame.shape)
-    detections = match_detections_with_tracks(results, tracks)
-    return detections
+    if tracks:
+        return match_detections_with_tracks(results, tracks)
+    return []
